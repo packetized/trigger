@@ -10,6 +10,7 @@ __maintainer__ = 'Jathan McCollum'
 __email__ = 'jathan.mccollum@teamaol.com'
 __copyright__ = 'Copyright 2006-2013, AOL Inc.; 2013 Salesforce.com'
 
+import copy
 import fcntl
 import os
 import re
@@ -211,13 +212,16 @@ def pty_connect(device, action, creds=None, display_banner=None,
         port = 22
 
     # or Telnet?
-    else:
+    elif settings.TELNET_ENABLED:
         log.msg('[%s] SSH connection test FAILED, falling back to telnet' %
                 device)
         factory = TriggerTelnetClientFactory(d, action, creds,
-                                             init_commands=init_commands)
+                                             init_commands=init_commands, device=device)
         log.msg('Trying telnet to %s' % device, debug=True)
         port = 23
+    else:
+        log.msg('[%s] SSH connection test FAILED, telnet fallback disabled' % device)
+        return None
 
     reactor.connectTCP(device.nodeName, port, factory)
     # TODO (jathan): There has to be another way than calling Tacacsrc
@@ -1091,7 +1095,7 @@ class TriggerSSHChannelBase(channel.SSHChannel, TimeoutMixin, object):
         log.msg('[%s] COMMANDS: %r' % (self.device, self.factory.commands))
         self.data = ''
         self.initialized = self.factory.initialized
-        self.startup_commands = self.device.startup_commands
+        self.startup_commands = copy.copy(self.device.startup_commands)
         log.msg('[%s] My startup commands: %r' % (self.device,
                                                   self.startup_commands))
 
@@ -1481,11 +1485,12 @@ class TriggerTelnetClientFactory(TriggerClientFactory):
     Factory for a telnet connection.
     """
     def __init__(self, deferred, action, creds=None, loginpw=None,
-                 enablepw=None, init_commands=None):
+                 enablepw=None, init_commands=None, device=None):
         self.protocol = TriggerTelnet
         self.action = action
         self.loginpw = loginpw
         self.enablepw = os.getenv('TRIGGER_ENABLEPW', enablepw)
+        self.device = device
         self.action.factory = self
         TriggerClientFactory.__init__(self, deferred, creds, init_commands)
 
@@ -1664,7 +1669,7 @@ class IoslikeSendExpect(protocol.Protocol, TimeoutMixin):
         self.timeout = timeout
         self.command_interval = command_interval
         self.prompt =  re.compile(settings.IOSLIKE_PROMPT_PAT)
-        self.startup_commands = self.device.startup_commands
+        self.startup_commands = copy.copy(self.device.startup_commands)
         log.msg('[%s] My initialize commands: %r' % (self.device,
                                                      self.startup_commands))
         self.initialized = False
@@ -1734,7 +1739,7 @@ class IoslikeSendExpect(protocol.Protocol, TimeoutMixin):
                 next_init = self.startup_commands.pop(0)
                 log.msg('[%s] Sending initialize command: %r' % (self.device,
                                                                  next_init))
-                self.write(next_init)
+                self.write(next_init.strip() + self.device.delimiter)
                 return None
             else:
                 log.msg('[%s] Successfully initialized for command execution' %
@@ -1757,7 +1762,7 @@ class IoslikeSendExpect(protocol.Protocol, TimeoutMixin):
             self._send_next()
         else:
             log.msg('[%s] Sending command %r' % (self.device, next_command))
-            self.write(next_command + '\n')
+            self.write(next_command + self.device.delimiter)
 
     def timeoutConnection(self):
         """Do this when we timeout."""
